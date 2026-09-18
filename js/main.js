@@ -554,31 +554,34 @@ async function renderNearbySchools() {
         return;
     }
 
-    showLoading(`Calculating routes for ${candidatesByHaversine.length} schools...`);
+    showLoading(`Calculating routes for ${candidatesByHaversine.length} schools (in parallel)...`);
 
-    const routeResults = [];
-    for (let i = 0; i < candidatesByHaversine.length; i++) {
-        const cand = candidatesByHaversine[i];
-        logStep("QUERYING_ROUTE", `${i + 1}/${candidatesByHaversine.length}: ${cand.item.school.name}`);
-
-        const route = await getRouteDistance(
+    // Query all routes in PARALLEL
+    const routePromises = candidatesByHaversine.map(cand =>
+        getRouteDistance(
             searchLocation.lat, searchLocation.lng,
             Number(cand.item.school.latitude),
             Number(cand.item.school.longitude),
             cand.item.school.name
-        );
+        ).then(route => {
+            if (route && route.geometry) {
+                return {
+                    item: cand.item,
+                    distance: route.distance,
+                    duration: route.duration,
+                    geometry: route.geometry
+                };
+            }
+            return null;
+        }).catch(error => {
+            logError("ROUTE_QUERY_FAILED", `${cand.item.school.name}: ${error.message}`);
+            return null;
+        })
+    );
 
-        if (route && route.geometry) {
-            routeResults.push({
-                item: cand.item,
-                distance: route.distance,
-                duration: route.duration,
-                geometry: route.geometry
-            });
-        } else {
-            logStep("ROUTE_SKIPPED", `${cand.item.school.name} (no geometry)`);
-        }
-    }
+    const routeResults = (await Promise.all(routePromises)).filter(r => r !== null);
+
+    logSuccess("ALL_ROUTES_QUERIED_PARALLEL", `${routeResults.length} valid routes`);
 
     routeResults.sort((a, b) => a.distance - b.distance);
     logSuccess("ALL_ROUTES_CALCULATED", `${routeResults.length} valid routes`);
@@ -685,7 +688,7 @@ async function findNearestSchool() {
         setSearchLocation(lat, lng, "My Current Location");
         document.getElementById("locationSearchInput").value = "My Current Location";
 
-        showLoading("Finding nearest school (querying top 10 candidates)...");
+        showLoading("Finding nearest school (querying top 5 candidates in parallel)...");
 
         const candidatesWithHaversine = schoolMarkers.map(function (item) {
             const distance = haversineMiles(
@@ -697,31 +700,37 @@ async function findNearestSchool() {
         });
 
         candidatesWithHaversine.sort((a, b) => a.distance - b.distance);
-        const topCandidates = candidatesWithHaversine.slice(0, 10);
+        const topCandidates = candidatesWithHaversine.slice(0, 5);
 
-        logSuccess("TOP_10_FILTERED", topCandidates.map(c => `${c.item.school.name} (${c.distance.toFixed(2)} mi)`));
+        logSuccess("TOP_5_FILTERED", topCandidates.map(c => `${c.item.school.name} (${c.distance.toFixed(2)} mi)`));
 
-        const routeResults = [];
-        for (let i = 0; i < topCandidates.length; i++) {
-            const cand = topCandidates[i];
-            showLoading(`Checking route ${i + 1}/10: ${cand.item.school.name}...`);
-
-            const route = await getRouteDistance(
+        // Query routes in PARALLEL instead of sequential
+        showLoading("Querying OSRM for all 5 candidates (in parallel)...");
+        const routePromises = topCandidates.map(cand =>
+            getRouteDistance(
                 lat, lng,
                 Number(cand.item.school.latitude),
                 Number(cand.item.school.longitude),
                 cand.item.school.name
-            );
+            ).then(route => {
+                if (route && route.geometry) {
+                    return {
+                        item: cand.item,
+                        distance: route.distance,
+                        duration: route.duration,
+                        geometry: route.geometry
+                    };
+                }
+                return null;
+            }).catch(error => {
+                logError("ROUTE_QUERY_FAILED", `${cand.item.school.name}: ${error.message}`);
+                return null;
+            })
+        );
 
-            if (route && route.geometry) {
-                routeResults.push({
-                    item: cand.item,
-                    distance: route.distance,
-                    duration: route.duration,
-                    geometry: route.geometry
-                });
-            }
-        }
+        const routeResults = (await Promise.all(routePromises)).filter(r => r !== null);
+
+        logSuccess("ALL_ROUTES_QUERIED_PARALLEL", `${routeResults.length} valid routes`);
 
         routeResults.sort((a, b) => a.distance - b.distance);
 
@@ -739,7 +748,7 @@ async function findNearestSchool() {
                 radiusSelect.value = fitting || options[options.length - 1];
             }
 
-            renderNearbySchools();
+            hideLoading();
         } else {
             logError("FIND_NEAREST", "No valid routes found");
             hideLoading();
