@@ -443,11 +443,13 @@ async function getRouteDistance(lat1, lng1, lat2, lng2, schoolName) {
     }
 
     try {
-        const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full`;
+        const url = `https://router.project-osrm.org/route/v1/driving/${lng1},${lat1};${lng2},${lat2}?overview=full&geometries=geojson`;
         logStep("OSRM_REQUEST", url);
 
         const response = await fetch(url);
         const data = await response.json();
+
+        logStep("OSRM_RAW_RESPONSE", { code: data.code, routeCount: data.routes?.length || 0 });
 
         if (data.code !== 'Ok') {
             logError("OSRM_RESPONSE", `Code: ${data.code}, Message: ${data.message}`);
@@ -461,11 +463,19 @@ async function getRouteDistance(lat1, lng1, lat2, lng2, schoolName) {
             const durationSeconds = route.duration;
             const durationText = formatDuration(durationSeconds);
 
+            logStep("OSRM_GEOMETRY_CHECK", {
+                hasGeometry: !!route.geometry,
+                geometryType: typeof route.geometry,
+                hasCoordinates: !!route.geometry?.coordinates,
+                coordinatesLength: route.geometry?.coordinates?.length || 0
+            });
+
             logSuccess("ROUTE_CALCULATED", {
                 school: schoolName,
                 distance: `${distanceMiles.toFixed(2)} miles`,
                 duration: durationText,
-                hasGeometry: !!route.geometry
+                hasGeometry: !!route.geometry,
+                hasCoordinates: !!route.geometry?.coordinates
             });
 
             return {
@@ -773,6 +783,20 @@ async function showRoute(school, marker) {
         alert("Route geometry not available.");
         hideLoading();
         logError("SHOW_ROUTE", "No geometry in route");
+        return;
+    }
+
+    if (!route.geometry.coordinates || !Array.isArray(route.geometry.coordinates)) {
+        alert("Route coordinates not available.");
+        hideLoading();
+        logError("SHOW_ROUTE", "Coordinates missing or invalid", route.geometry);
+        return;
+    }
+
+    if (route.geometry.coordinates.length === 0) {
+        alert("Route has no coordinate data.");
+        hideLoading();
+        logError("SHOW_ROUTE", "Empty coordinates array");
         return;
     }
 
